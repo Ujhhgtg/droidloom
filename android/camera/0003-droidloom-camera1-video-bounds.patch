@@ -1,9 +1,6 @@
-diff --git a/services/camera/libcameraservice/api1/client2/Parameters.cpp b/services/camera/libcameraservice/api1/client2/Parameters.cpp
-index 0000000..0000000 100644
 --- a/services/camera/libcameraservice/api1/client2/Parameters.cpp
 +++ b/services/camera/libcameraservice/api1/client2/Parameters.cpp
-@@ -110,6 +110,14 @@ status_t Parameters::initialize(CameraDeviceBase *device) {
-         if (h1 > maxVideoHeight) {
+@@ -110,6 +110,15 @@
              maxVideoHeight = h1;
          }
      }
