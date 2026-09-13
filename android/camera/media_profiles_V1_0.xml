@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<MediaSettings>
+    <CamcorderProfiles cameraId="0">
+        <EncoderProfile quality="low" fileFormat="mp4" duration="30">
+            <Video codec="h264" bitRate="1000000" width="640" height="480" frameRate="30" />
+            <Audio codec="aac" bitRate="64000" sampleRate="44100" channels="1" />
+        </EncoderProfile>
+    </CamcorderProfiles>
+    <EncoderOutputFileFormat name="mp4" />
+    <VideoEncoderCap name="h264" enabled="true" minBitRate="64000" maxBitRate="10000000" minFrameWidth="160" maxFrameWidth="1920" minFrameHeight="120" maxFrameHeight="1080" minFrameRate="1" maxFrameRate="60" />
+    <AudioEncoderCap name="aac" enabled="true" minBitRate="8000" maxBitRate="320000" minSampleRate="8000" maxSampleRate="48000" minChannels="1" maxChannels="2" />
+</MediaSettings>

@@ -392,7 +392,6 @@ pub fn assemble_artifacts(
         ("system/bin/netd", "bin/netd-cell-policy"),
         ("system/bin/servicemanager", "bin/servicemanager"),
         ("system/bin/surfaceflinger", "bin/surfaceflinger"),
-        ("system/bin/cameraserver", "bin/cameraserver"),
         (
             "vendor/bin/hw/android.hardware.graphics.composer3-service.droidloom",
             "bin/android.hardware.graphics.composer3-service.droidloom",

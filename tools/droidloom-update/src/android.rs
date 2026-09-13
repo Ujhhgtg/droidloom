@@ -10,7 +10,6 @@ pub const TARGETS: &[&str] = &[
     "droidloom-native-bridge",
     "android.hardware.graphics.composer3-service.droidloom",
     "android.hardware.camera.provider-V1-external-service",
-    "cameraserver",
     "droidloom-task-launcher",
     "droidloom-input-bridge",
     "DroidloomIME",
@@ -66,10 +65,6 @@ const PATCHES: &[(&str, &str)] = &[
     (
         "hardware/interfaces",
         "android/camera/0001-droidloom-v4l2-camera-input.patch",
-    ),
-    (
-        "frameworks/av",
-        "android/camera/0003-droidloom-camera1-video-bounds.patch",
     ),
     (
         "frameworks/native",
