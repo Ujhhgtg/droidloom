@@ -74,6 +74,8 @@ PRODUCT_COPY_FILES += \
     frameworks/av/services/audiopolicy/config/surround_sound_configuration_5_0.xml:$(TARGET_COPY_OUT_VENDOR)/etc/surround_sound_configuration_5_0.xml
 
 PRODUCT_VENDOR_PROPERTIES += \
+    ro.serialno=DROIDLOOM-CAMERA-X86_64 \
+    ro.boot.serialno=DROIDLOOM-CAMERA-X86_64 \
     ro.zygote=zygote64 \
     ro.vendor.droidloom.surfaceflinger_direct=true \
     ro.vendor.droidloom.surfaceflinger_tasks=true \
