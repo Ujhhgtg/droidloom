@@ -149,7 +149,7 @@ index 4e90a67..c2fabc4 100644
  
      const double kDefaultFps = 30.0;
      double fps = std::numeric_limits<double>::max();
-@@ -1157,6 +1157,9 @@ int ExternalCameraDeviceSession::configureV4l2StreamLocked(const SupportedV4L2Fo
+@@ int ExternalCameraDeviceSession::configureV4l2StreamLocked(const SupportedV4L2Fo
      // Driver can indeed return more buffer if it needs more to operate
 -    if (req_buffers.count < v4lBufferCount) {
 +    // Some V4L2 devices (including v4l2loopback) provide fewer buffers than
@@ -171,7 +171,7 @@ index 4e90a67..c2fabc4 100644
  }
  
  void ExternalCameraDeviceSession::enqueueV4l2Frame(const std::shared_ptr<V4L2Frame>& frame) {
-@@ -1499,8 +1499,12 @@ int ExternalCameraDeviceSession::setV4l2FpsLocked(double fps) {
+@@ int ExternalCameraDeviceSession::setV4l2FpsLocked(double fps) {
      int ret = TEMP_FAILURE_RETRY(ioctl(mV4l2Fd.get(), VIDIOC_G_PARM, &streamparm));
      if (ret != 0) {
 -        if (errno == -EINVAL) {
