@@ -26,7 +26,9 @@ device in legacy Camera API enumeration.
 
 The service runs as `cameraserver` with camera and graphics groups, without host
 realtime scheduling capabilities or Android CPU task-profile assumptions.
-Its VINTF fragment is installed by the binary; no second manifest entry is needed.
+The device VINTF manifest declares the provider instance
+`ICameraProvider/external/0`; servicemanager requires that declaration before
+the binary can register.
 
 The raw-plane regression runs in `cargo test --locked -j 1 -p droidloom-update`.
 To also run it with address and undefined-behavior sanitizers on the host:
