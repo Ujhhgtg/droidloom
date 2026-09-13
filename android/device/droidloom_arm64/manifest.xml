@@ -1,8 +1,12 @@
 <manifest version="9.0" type="device" target-level="202604">
-    <!-- The AOSP external provider registers this exact AIDL instance. -->
-    <hal format="aidl">
+    <!-- AOSP HIDL external provider keeps the legacy Camera1 shim working. -->
+    <hal format="hidl" override="false">
         <name>android.hardware.camera.provider</name>
-        <version>1</version>
-        <fqname>ICameraProvider/external/0</fqname>
+        <transport>hwbinder</transport>
+        <version>2.4</version>
+        <interface>
+            <name>ICameraProvider</name>
+            <instance>external/0</instance>
+        </interface>
     </hal>
 </manifest>
