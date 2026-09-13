@@ -8,3 +8,13 @@ cc_library_headers {
     export_include_dirs: ["include"],
     visibility: ["//hardware/interfaces/camera/device/default:__pkg__"],
 }
+
+// Android 17's camera client lists this compatibility shim as a shared
+// dependency, although the Droidloom system image already supplies the API
+// implementation in lib-camera-compatibility-info-api. Keep the native link
+// closure explicit for the rebuilt cameraserver.
+cc_library_shared {
+    name: "libcameracompatbilityinfo",
+    srcs: ["camera_compat_stub.cpp"],
+    vendor: true,
+}
