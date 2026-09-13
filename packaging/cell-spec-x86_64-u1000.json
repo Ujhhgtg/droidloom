@@ -73,6 +73,10 @@
       "target": "/system/bin/surfaceflinger"
     },
     {
+      "source": "/usr/lib/droidloom/current/bin/cameraserver",
+      "target": "/system/bin/cameraserver"
+    },
+    {
       "source": "/usr/lib/droidloom/current/etc/init/droidloom-composer.rc",
       "target": "/vendor/etc/init/droidloom-composer.rc"
     },
