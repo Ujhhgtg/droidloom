@@ -1005,7 +1005,8 @@
       "commit": "be7c3a630b5dc5eb3260035d77a81b2f322754f8",
       "purpose": "Pinned commons-cli Java prebuilt required by the XSD compiler",
       "sparse_paths": [
-        "common/commons-cli"
+        "common/commons-cli",
+        "linux-x86/yasm/yasm"
       ]
     },
     {
