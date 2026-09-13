@@ -72,6 +72,7 @@ pub fn check(packages: &Path, previous: Option<&Path>) -> Result<()> {
     let mut container = podman(&work);
     container
         .args(["run", "--detach", "--init", "--name", &name])
+        .arg("--network=host")
         .arg("--volume")
         .arg(format!("{}:/packages:ro", packages.display()))
         .arg("--volume")
