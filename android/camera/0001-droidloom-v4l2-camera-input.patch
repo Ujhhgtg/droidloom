@@ -166,7 +166,7 @@ index 4e90a67..c2fabc4 100644
      int ret = TEMP_FAILURE_RETRY(ioctl(mV4l2Fd.get(), VIDIOC_G_PARM, &streamparm));
      if (ret != 0) {
 -        if (errno == -EINVAL) {
-+        if (errno == -EINVAL || errno == -ENOTTY || errno == -ENOSYS || errno == -EOPNOTSUPP) {
++        if (errno == EINVAL || errno == ENOTTY || errno == ENOSYS || errno == EOPNOTSUPP) {
              ALOGW("%s: device does not support VIDIOC_G_PARM", __FUNCTION__);
 +            // Frame rate control is optional for V4L2 capture devices.
 +            return -EINVAL;
