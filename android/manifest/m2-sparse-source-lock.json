@@ -54,7 +54,9 @@
       "name": "platform/frameworks/wilhelm",
       "commit": "cbc8f246cd0c18d3c286ab39620846badd0676fb",
       "purpose": "OpenSL ES and OpenMAX AL public headers for the NativeBridge audio proxies",
-      "sparse_paths": ["include"]
+      "sparse_paths": [
+        "include"
+      ]
     },
     {
       "path": "frameworks/libs/native_bridge_support",
@@ -854,7 +856,9 @@
         "soundtrigger/2.2",
         "tv/cec/1.0",
         "tv/tuner/aidl",
-        "soundtrigger/aidl"
+        "soundtrigger/aidl",
+        "camera/device",
+        "camera/provider"
       ]
     },
     {
