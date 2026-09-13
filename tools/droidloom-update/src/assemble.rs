@@ -40,6 +40,25 @@ pub(crate) fn download(url: &str, path: &Path, expected: &str) -> Result<()> {
     fs::rename(scratch, path)?;
     Ok(())
 }
+
+fn public_artifact_url(page_url: &str, artifact: &str) -> Result<String> {
+    let page = output(Command::new("curl").args(["--fail", "--location", "--retry", "3", "--silent", page_url]))?;
+    let marker = "\"artifactUrl\":\"";
+    let start = page
+        .find(marker)
+        .ok_or_else(|| format!("Android CI artifact page has no artifactUrl for {artifact}"))?
+        + marker.len();
+    let end = page[start..]
+        .find("\"")
+        .ok_or("Android CI artifact URL is truncated")?
+        + start;
+    let encoded = &page[start..end];
+    let url: String = serde_json::from_str(&format!("\"{encoded}\""))?;
+    if !url.ends_with(artifact) && !url.contains(&format!("/{artifact}?")) {
+        return fail("Android CI artifact page returned a different artifact");
+    }
+    Ok(url)
+}
 fn extract(image: &Path, destination: &Path) -> Result<()> {
     fs::create_dir_all(destination)?;
     run(Command::new("fsck.erofs")
@@ -105,12 +124,10 @@ fn prepare_inputs_from(
     } else {
         let archive = repo.join(".work").join(&typed.aosp_ci_base.artifact_name);
         // Public redirect endpoint used by Android's kleaf kernel_prebuilt_repo.bzl.
-        let url = format!(
-            "https://androidbuildinternal.googleapis.com/android/internal/build/v3/builds/{}/{}/attempts/latest/artifacts/{}/url?redirect=true",
-            typed.aosp_ci_base.build_number,
-            typed.aosp_ci_base.target,
-            typed.aosp_ci_base.artifact_name
-        );
+        let url = public_artifact_url(
+            &typed.aosp_ci_base.artifact_page_url,
+            &typed.aosp_ci_base.artifact_name,
+        )?;
         download(&url, &archive, &typed.aosp_ci_base.artifact_sha256)?;
         if base.exists() {
             fs::remove_dir_all(&base)?;
