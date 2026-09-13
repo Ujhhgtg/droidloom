@@ -54,7 +54,9 @@
       "name": "platform/frameworks/wilhelm",
       "commit": "cbc8f246cd0c18d3c286ab39620846badd0676fb",
       "purpose": "OpenSL ES and OpenMAX AL public headers for the NativeBridge audio proxies",
-      "sparse_paths": ["include"]
+      "sparse_paths": [
+        "include"
+      ]
     },
     {
       "path": "frameworks/libs/native_bridge_support",
@@ -716,7 +718,7 @@
       "path": "hardware/interfaces",
       "name": "platform/hardware/interfaces",
       "commit": "0162af698935100a590b7359581ac8b1b80693e5",
-      "purpose": "Frozen graphics interfaces and AIDL/HIDL external camera provider implementations",
+      "purpose": "Frozen graphics AIDL interfaces and the external camera provider implementation",
       "sparse_paths": [
         "apexkey",
         "camera/common",
