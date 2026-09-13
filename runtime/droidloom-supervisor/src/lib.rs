@@ -339,7 +339,7 @@ fn is_v4l2_video_path(path: &Path) -> bool {
 }
 
 pub(crate) fn validate_v4l2_capture_device(path: &Path) -> Result<(), String> {
-    let metadata = std::fs::metadata(path).map_err(|error| error.to_string())?;
+    let metadata = std::fs::symlink_metadata(path).map_err(|error| error.to_string())?;
     if !metadata.file_type().is_char_device() {
         return Err("path is not a character device".into());
     }
