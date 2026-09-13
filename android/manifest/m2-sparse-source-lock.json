@@ -54,9 +54,7 @@
       "name": "platform/frameworks/wilhelm",
       "commit": "cbc8f246cd0c18d3c286ab39620846badd0676fb",
       "purpose": "OpenSL ES and OpenMAX AL public headers for the NativeBridge audio proxies",
-      "sparse_paths": [
-        "include"
-      ]
+      "sparse_paths": ["include"]
     },
     {
       "path": "frameworks/libs/native_bridge_support",
@@ -722,7 +720,6 @@
       "sparse_paths": [
         "apexkey",
         "camera/common",
-        "camera/device",
         "camera/metadata/3.2",
         "camera/metadata/3.3",
         "camera/metadata/3.4",
@@ -730,7 +727,10 @@
         "camera/metadata/3.6",
         "camera/metadata/3.7",
         "camera/metadata/aidl",
-        "camera/provider",
+        "camera/device/aidl",
+        "camera/device/default",
+        "camera/provider/aidl",
+        "camera/provider/default",
         "audio/aidl",
         "bluetooth/audio/aidl/aidl_api",
         "bluetooth/audio/aidl/android",
@@ -854,11 +854,7 @@
         "soundtrigger/2.2",
         "tv/cec/1.0",
         "tv/tuner/aidl",
-        "soundtrigger/aidl",
-        "camera/device/aidl",
-        "camera/device/default",
-        "camera/provider/aidl",
-        "camera/provider/default"
+        "soundtrigger/aidl"
       ]
     },
     {
