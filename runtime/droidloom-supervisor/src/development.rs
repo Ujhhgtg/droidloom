@@ -110,7 +110,8 @@ pub fn validate_development_inputs(spec: &CellSpec) -> Result<(), DevelopmentErr
         let image = crate::gapps::partition_image(spec, name);
         detect_read_only_filesystem(&image)?;
     }
-    crate::gapps::validate(spec).map_err(|error| DevelopmentError::InvalidInput(error.to_string()))?;
+    crate::gapps::validate(spec)
+        .map_err(|error| DevelopmentError::InvalidInput(error.to_string()))?;
     if starts_with_magic(&spec.vendor_image, 0, &ANDROID_SPARSE_MAGIC)? {
         return Err(DevelopmentError::InvalidInput(format!(
             "{} is Android-sparse; convert it with simg2img before boot",
@@ -642,9 +643,12 @@ fn cleanup_runtime_directory(spec: &CellSpec) -> Result<(), DevelopmentError> {
     }
     let cpu_policy = spec.runtime_dir.join("cpu-policy");
     if cpu_policy.exists() {
-        for entry in fs::read_dir(&cpu_policy).map_err(|e| io_error("read CPU policy directory", e))? {
+        for entry in
+            fs::read_dir(&cpu_policy).map_err(|e| io_error("read CPU policy directory", e))?
+        {
             let entry = entry.map_err(|e| io_error("read CPU policy entry", e))?;
-            fs::remove_file(entry.path()).map_err(|e| io_error("remove generated CPU policy", e))?;
+            fs::remove_file(entry.path())
+                .map_err(|e| io_error("remove generated CPU policy", e))?;
         }
         fs::remove_dir(cpu_policy).map_err(|e| io_error("remove CPU policy directory", e))?;
     }
@@ -819,7 +823,9 @@ pub fn enter_development_cell(spec: &CellSpec) -> Result<(), DevelopmentError> {
     let cpu_policy = crate::cpu_placement::prepare(&root, spec.id().as_str())
         .map_err(|source| io_error("prepare private Android CPU placement hierarchy", source))?;
     bind_development_cgroups(spec, &root, cpu_policy.is_some())?;
-    if let Some(policy) = cpu_policy { bind_cpu_policy(spec, &root, &policy)?; }
+    if let Some(policy) = cpu_policy {
+        bind_cpu_policy(spec, &root, &policy)?;
+    }
 
     // The reusable base is a system-as-root image, but Droidloom has already
     // supplied the mounts that Android first-stage init normally constructs.
@@ -837,8 +843,7 @@ pub fn enter_development_cell(spec: &CellSpec) -> Result<(), DevelopmentError> {
             .env("vendor.minigbm.allocator", "dma_heap_images");
     }
     let error = std::os::unix::process::CommandExt::exec(
-        init
-            .arg("second_stage")
+        init.arg("second_stage")
             // Android's mount-namespace decision runs before ro.boot.*
             // properties are guaranteed to exist. Give the package-owned
             // init adaptation an unambiguous early-boot marker instead.
@@ -1563,6 +1568,33 @@ fn create_private_dev(spec: &CellSpec, root: &Path) -> Result<(), DevelopmentErr
         make_device_node(&dev.join(name), "c", major, minor, mode)?;
     }
 
+    // An explicitly configured V4L2 capture node is projected as Android's
+    // canonical camera device. Keep this opt-in: no host camera nodes are
+    // exposed unless the cell specification names one and validation proves
+    // it supports V4L2 capture.
+    if let Some(camera) = &spec.camera_device {
+        crate::validate_v4l2_capture_device(camera).map_err(|error| {
+            DevelopmentError::InvalidInput(format!(
+                "camera device {} is not usable: {error}",
+                camera.display()
+            ))
+        })?;
+        let metadata =
+            fs::metadata(camera).map_err(|source| io_error("stat camera device", source))?;
+        let (major, minor) = linux_device_numbers(metadata.rdev());
+        make_device_node(
+            &dev.join("video0"),
+            "c",
+            u32::try_from(major).map_err(|_| {
+                DevelopmentError::InvalidInput("camera major exceeds 32-bit range".into())
+            })?,
+            u32::try_from(minor).map_err(|_| {
+                DevelopmentError::InvalidInput("camera minor exceeds 32-bit range".into())
+            })?,
+            "666",
+        )?;
+    }
+
     // The pinned CI base contains ext4-payload APEX packages. apexd obtains
     // unused loop minors through loop-control; provide only loop devices, not
     // the host block-device tree that ueventd would otherwise recreate.
@@ -1683,8 +1715,12 @@ fn create_private_dev(spec: &CellSpec, root: &Path) -> Result<(), DevelopmentErr
     if text_socket.exists() {
         if !fs::metadata(&text_socket)
             .map_err(|source| io_error("stat text-input socket", source))?
-            .file_type().is_socket() {
-            return Err(DevelopmentError::InvalidInput("text-input endpoint is not a socket".into()));
+            .file_type()
+            .is_socket()
+        {
+            return Err(DevelopmentError::InvalidInput(
+                "text-input endpoint is not a socket".into(),
+            ));
         }
         let target = root.join("dev/socket/droidloom/text-input");
         create_mount_target(&target)?;
@@ -1715,20 +1751,29 @@ fn auxiliary_graphics_device_numbers(path: &Path) -> Result<(u32, u32), Developm
         .map_err(|source| io_error("stat auxiliary graphics device", source))?;
     if !metadata.file_type().is_char_device() {
         return Err(DevelopmentError::InvalidInput(format!(
-            "{} must be a character device, not a symlink", path.display()
+            "{} must be a character device, not a symlink",
+            path.display()
         )));
     }
     let (major, minor) = linux_device_numbers(metadata.rdev());
     let uevent = fs::read_to_string(format!("/sys/dev/char/{major}:{minor}/uevent"))
         .map_err(|source| io_error("read auxiliary graphics device identity", source))?;
-    let expected = format!("DEVNAME={}", path.strip_prefix("/dev").expect("fixed device path").display());
+    let expected = format!(
+        "DEVNAME={}",
+        path.strip_prefix("/dev")
+            .expect("fixed device path")
+            .display()
+    );
     if !uevent.lines().any(|line| line == expected) {
         return Err(DevelopmentError::InvalidInput(format!(
-            "{} does not match its kernel device identity", path.display()
+            "{} does not match its kernel device identity",
+            path.display()
         )));
     }
-    Ok((u32::try_from(major).expect("Linux device major"),
-        u32::try_from(minor).expect("Linux device minor")))
+    Ok((
+        u32::try_from(major).expect("Linux device major"),
+        u32::try_from(minor).expect("Linux device minor"),
+    ))
 }
 
 fn bind_boot_parameters(spec: &CellSpec, root: &Path) -> Result<(), DevelopmentError> {
@@ -1747,21 +1792,30 @@ fn bind_boot_parameters(spec: &CellSpec, root: &Path) -> Result<(), DevelopmentE
     bind_mount(&cmdline, &root.join("proc/cmdline"), true)
 }
 
-fn bind_development_cgroups(spec: &CellSpec, root: &Path, cpuset: bool) -> Result<(), DevelopmentError> {
+fn bind_development_cgroups(
+    spec: &CellSpec,
+    root: &Path,
+    cpuset: bool,
+) -> Result<(), DevelopmentError> {
     // The target host is unified cgroup v2. Keep Android's legacy controller
     // descriptors optional so their unavailable v1 mounts cannot prevent the
     // private v2 hierarchy (and its /system subtree) from being created.
     let source = spec.runtime_dir.join("android-cgroups.json");
-    let mut config: serde_json::Value = serde_json::from_str(DEVELOPMENT_CGROUPS)
-        .expect("embedded cgroup configuration is valid");
+    let mut config: serde_json::Value =
+        serde_json::from_str(DEVELOPMENT_CGROUPS).expect("embedded cgroup configuration is valid");
     if cpuset {
         // CPU placement uses cpuset. Do not advertise an unusable legacy CPU
         // controller: get_sched_policy() must read the real cpuset hierarchy.
-        config["Cgroups"].as_array_mut().expect("controller list")
+        config["Cgroups"]
+            .as_array_mut()
+            .expect("controller list")
             .retain(|controller| controller["Controller"] != "cpu");
     }
-    fs::write(&source, serde_json::to_vec_pretty(&config).expect("JSON value serializes"))
-        .map_err(|source| io_error("write Android development cgroup configuration", source))?;
+    fs::write(
+        &source,
+        serde_json::to_vec_pretty(&config).expect("JSON value serializes"),
+    )
+    .map_err(|source| io_error("write Android development cgroup configuration", source))?;
     bind_mount(&source, &root.join(ANDROID_CGROUPS_TARGET), true)
 }
 
@@ -1772,14 +1826,16 @@ fn bind_cpu_policy(spec: &CellSpec, root: &Path, policy: &str) -> Result<(), Dev
     // shared-kernel adaptations. The appended on-init action follows AOSP's
     // cpuset defaults and completes before services are started.
     let target = root.join("system/etc/init/hw/init.rc");
-    let mut init = fs::read_to_string(&target).map_err(|e| io_error("read Android init policy", e))?;
+    let mut init =
+        fs::read_to_string(&target).map_err(|e| io_error("read Android init policy", e))?;
     init.push_str(policy);
     let source = directory.join("init.rc");
     fs::write(&source, init).map_err(|e| io_error("write Android CPU init policy", e))?;
     bind_mount(&source, &target, true)?;
 
     let target = root.join("system/etc/init/surfaceflinger.rc");
-    let original = fs::read_to_string(&target).map_err(|e| io_error("read SurfaceFlinger service", e))?;
+    let original =
+        fs::read_to_string(&target).map_err(|e| io_error("read SurfaceFlinger service", e))?;
     let service = crate::cpu_placement::graphics_service(&original)
         .map_err(|e| io_error("set SurfaceFlinger graphics role", e))?;
     let source = directory.join("surfaceflinger.rc");
@@ -1787,23 +1843,35 @@ fn bind_cpu_policy(spec: &CellSpec, root: &Path, policy: &str) -> Result<(), Dev
     bind_mount(&source, &target, true)?;
 
     let mut targets = vec![root.join("system/etc/task_profiles.json")];
-    for relative in ["vendor/etc/task_profiles.json", "system_ext/etc/task_profiles.json"] {
+    for relative in [
+        "vendor/etc/task_profiles.json",
+        "system_ext/etc/task_profiles.json",
+    ] {
         let target = root.join(relative);
-        if target.exists() { targets.push(target); }
+        if target.exists() {
+            targets.push(target);
+        }
     }
     // API-specific profiles load between system and vendor; translate them
     // too, so an older image cannot silently replace a working CPU backend.
     let api_directory = root.join("system/etc/task_profiles");
     if api_directory.is_dir() {
-        for entry in fs::read_dir(api_directory).map_err(|e| io_error("read API task profiles", e))? {
+        for entry in
+            fs::read_dir(api_directory).map_err(|e| io_error("read API task profiles", e))?
+        {
             let entry = entry.map_err(|e| io_error("read API task profile entry", e))?;
-            if entry.file_name().to_str().is_some_and(|s| s.starts_with("task_profiles_") && s.ends_with(".json")) {
+            if entry
+                .file_name()
+                .to_str()
+                .is_some_and(|s| s.starts_with("task_profiles_") && s.ends_with(".json"))
+            {
                 targets.push(entry.path());
             }
         }
     }
     for (index, target) in targets.iter().enumerate() {
-        let original = fs::read_to_string(target).map_err(|e| io_error("read Android task profiles", e))?;
+        let original =
+            fs::read_to_string(target).map_err(|e| io_error("read Android task profiles", e))?;
         let translated = crate::cpu_placement::task_profiles(&original)
             .map_err(|e| io_error("translate Android CPU task profiles", e))?;
         let source = directory.join(format!("profiles-{index}.json"));

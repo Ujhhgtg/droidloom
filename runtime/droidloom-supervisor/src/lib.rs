@@ -7,15 +7,18 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod control;
+mod cpu_placement;
 pub mod development;
 mod development_network;
-mod cpu_placement;
 pub mod gapps;
 pub mod linux_plan;
 mod package_cache;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Display};
+use std::fs::OpenOptions;
+use std::os::fd::AsRawFd;
+use std::os::unix::fs::FileTypeExt;
 use std::path::{Component, Path, PathBuf};
 
 use droidloom_contracts::MIN_SUBORDINATE_IDS;
@@ -171,6 +174,11 @@ pub struct CellSpec {
     pub runtime_dir: PathBuf,
     /// The only DRM device exposed to Android.
     pub render_node: PathBuf,
+    /// Optional host V4L2 capture device exposed as `/dev/video0` in Android.
+    /// The device is never selected implicitly; callers must opt in with a
+    /// normalized `/dev/video<number>` path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera_device: Option<PathBuf>,
     /// Host-validated graphics pairing. Omission uses native DRM.
     #[serde(default)]
     pub graphics_backend: GraphicsBackend,
@@ -232,6 +240,17 @@ impl CellSpec {
             .is_some_and(|path| !is_normal_absolute(path))
         {
             problems.push("gapps_dir must be a normalized absolute path".into());
+        }
+
+        if let Some(camera) = &self.camera_device {
+            if !is_v4l2_video_path(camera) {
+                problems
+                    .push("camera_device must name a normalized /dev/video<number> path".into());
+            } else if let Err(error) = validate_v4l2_capture_device(camera) {
+                problems.push(format!(
+                    "camera_device is not a usable V4L2 capture device: {error}"
+                ));
+            }
         }
 
         if self
@@ -307,6 +326,50 @@ impl CellSpec {
             Err(SpecError { problems })
         }
     }
+}
+
+fn is_v4l2_video_path(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    path.parent() == Some(Path::new("/dev"))
+        && name.strip_prefix("video").is_some_and(|suffix| {
+            !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
+        })
+}
+
+pub(crate) fn validate_v4l2_capture_device(path: &Path) -> Result<(), String> {
+    let metadata = std::fs::metadata(path).map_err(|error| error.to_string())?;
+    if !metadata.file_type().is_char_device() {
+        return Err("path is not a character device".into());
+    }
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .or_else(|_| OpenOptions::new().read(true).open(path))
+        .map_err(|error| error.to_string())?;
+    let mut capability = [0_u8; 104];
+    // VIDIOC_QUERYCAP = _IOR('V', 0, struct v4l2_capability), whose ABI size
+    // is fixed at 104 bytes on supported Linux architectures.
+    const VIDIOC_QUERYCAP: libc::c_ulong =
+        (2_u64 << 30 | 104_u64 << 16 | (b'V' as u64) << 8) as libc::c_ulong;
+    // SAFETY: capability points to a writable 104-byte v4l2_capability buffer.
+    let result = unsafe { libc::ioctl(file.as_raw_fd(), VIDIOC_QUERYCAP, capability.as_mut_ptr()) };
+    if result < 0 {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    let capabilities = u32::from_ne_bytes(capability[84..88].try_into().expect("fixed V4L2 ABI"));
+    let device_caps = u32::from_ne_bytes(capability[88..92].try_into().expect("fixed V4L2 ABI"));
+    let effective = if capabilities & 0x8000_0000 != 0 {
+        device_caps
+    } else {
+        capabilities
+    };
+    if effective & (0x0000_0001 | 0x0000_1000) == 0 {
+        return Err("device does not advertise video capture capability".into());
+    }
+    Ok(())
 }
 
 fn is_normal_absolute(path: &Path) -> bool {
@@ -689,6 +752,7 @@ mod tests {
             data_dir: "/var/lib/droidloom/users/1000/data".into(),
             runtime_dir: "/run/droidloom/cells/u1000".into(),
             render_node: "/dev/dri/renderD128".into(),
+            camera_device: None,
             graphics_backend: GraphicsBackend::default(),
             denial_socket: "/run/user/1000/denial/native-bridge.sock".into(),
         }
@@ -704,8 +768,10 @@ mod tests {
         assert!(decoded.graphics_backend.auxiliary_devices().is_empty());
         json["graphics_backend"] = serde_json::json!("kgsl_dma_heap");
         let decoded: CellSpec = serde_json::from_value(json.clone()).unwrap();
-        assert_eq!(decoded.graphics_backend.auxiliary_devices(),
-                   &["/dev/kgsl-3d0", "/dev/dma_heap/system"]);
+        assert_eq!(
+            decoded.graphics_backend.auxiliary_devices(),
+            &["/dev/kgsl-3d0", "/dev/dma_heap/system"]
+        );
         json["graphics_backend"] = serde_json::json!("/dev/dri/card0");
         assert!(serde_json::from_value::<CellSpec>(json).is_err());
     }
