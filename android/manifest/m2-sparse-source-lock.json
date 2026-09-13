@@ -854,7 +854,11 @@
         "soundtrigger/2.2",
         "tv/cec/1.0",
         "tv/tuner/aidl",
-        "soundtrigger/aidl"
+        "soundtrigger/aidl",
+        "camera/device/aidl",
+        "camera/device/default",
+        "camera/provider/aidl",
+        "camera/provider/default"
       ]
     },
     {
