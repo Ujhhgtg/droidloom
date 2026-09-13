@@ -23,7 +23,7 @@ use thiserror::Error;
 const MAX_LOCK_BYTES: u64 = 1024 * 1024;
 const MAX_PROJECTS: usize = 256;
 const MAX_LINKS: usize = 64;
-const MAX_SPARSE_PATHS: usize = 144;
+const MAX_SPARSE_PATHS: usize = 256;
 const OFFICIAL_REMOTE: &str = "https://android.googlesource.com/";
 const STAGING_MARKER: &str = ".droidloom-source-staging.json";
 const FETCH_ATTEMPTS: usize = 3;
