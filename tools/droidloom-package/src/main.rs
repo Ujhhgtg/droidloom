@@ -380,8 +380,8 @@ fn build(
         podman(&work)
             .args([
                 "build",
-                // Let the build container use the desktop's configured proxy
-                // (127.0.0.1:7890) and normal DNS without rewriting URLs.
+                // Let the build container reach a desktop proxy bound to
+                // loopback, using the host's configured DNS and routes.
                 "--network=host",
                 "--tag",
                 "localhost/droidloom-arch-builder",

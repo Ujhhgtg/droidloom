@@ -87,8 +87,12 @@ must have installed MediaProvider before shared collections can be enabled.
 The initial device set is null, zero, full, random, urandom, tty/ptmx/devpts,
 the standard FUSE node used by Android's private emulated-storage mount,
 ashmem only if an AOSP compatibility audit still requires it, the three private
-Binder devices, and exactly one configured DRM render node. No `card*`, KMS,
-physical input, framebuffer, camera, media, USB, Bluetooth, modem, block, raw
+Binder devices, and exactly one configured DRM render node. An explicit
+`camera_device` setting additionally permits one V4L2 capture node, recreated
+at `/dev/video0` for Android's camera provider. Omission exposes no camera. The
+supervisor checks the selected character device and capture/streaming capability
+before starting Android. No `card*`, KMS,
+physical input, framebuffer, media, USB, Bluetooth, modem, block, raw
 memory, or host control node is allowed. The synthetic sysfs exposes the
 otherwise-empty fusectl mount point but no host FUSE connections.
 

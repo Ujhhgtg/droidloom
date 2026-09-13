@@ -1,0 +1,5 @@
+service vendor.camera.provider-ext /vendor/bin/hw/android.hardware.camera.provider-service.droidloom
+    interface aidl android.hardware.camera.provider.ICameraProvider/external/0
+    class hal
+    user cameraserver
+    group camera graphics drmrpc

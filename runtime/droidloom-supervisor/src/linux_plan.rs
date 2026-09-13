@@ -208,6 +208,10 @@ pub enum LinuxOperation {
         target: PathBuf,
         /// Cell permissions.
         mode: u32,
+        /// Cell owner UID (Android cameraserver).
+        uid: u32,
+        /// Cell owner GID (Android camera group).
+        gid: u32,
     },
     /// Add one private Binder context through binder-control.
     AddBinderDevice {
@@ -561,7 +565,9 @@ fn mount_operations(spec: &CellSpec) -> Vec<LinuxOperation> {
         operations.push(LinuxOperation::CreateCameraDevice {
             source: camera.clone(),
             target: "/dev/video0".into(),
-            mode: 0o666,
+            mode: 0o660,
+            uid: 1047,
+            gid: 1006,
         });
     }
     operations.extend(
@@ -992,6 +998,38 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert!(basic_devices.contains(&(Path::new("/dev/fuse"), 10, 229, 0o666)));
+    }
+
+    #[test]
+    fn explicit_camera_is_a_private_cameraserver_owned_node() {
+        let mut cell = spec();
+        cell.camera_device = Some("/dev/video999999".into());
+        let plan = build_linux_plan(&cell).unwrap();
+        let camera = plan
+            .construction
+            .iter()
+            .flat_map(|step| &step.operations)
+            .find_map(|operation| match operation {
+                LinuxOperation::CreateCameraDevice {
+                    source,
+                    target,
+                    mode,
+                    uid,
+                    gid,
+                } => Some((source, target, *mode, *uid, *gid)),
+                _ => None,
+            })
+            .expect("explicit camera node");
+        assert_eq!(camera.0, Path::new("/dev/video999999"));
+        assert_eq!(camera.1, Path::new("/dev/video0"));
+        assert_eq!((camera.2, camera.3, camera.4), (0o660, 1047, 1006));
+
+        let no_camera = build_linux_plan(&spec()).unwrap();
+        assert!(!no_camera
+            .construction
+            .iter()
+            .flat_map(|step| &step.operations)
+            .any(|operation| matches!(operation, LinuxOperation::CreateCameraDevice { .. })));
     }
 
     #[test]

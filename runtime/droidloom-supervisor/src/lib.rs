@@ -18,7 +18,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Display};
 use std::fs::OpenOptions;
 use std::os::fd::AsRawFd;
-use std::os::unix::fs::FileTypeExt;
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt};
 use std::path::{Component, Path, PathBuf};
 
 use droidloom_contracts::MIN_SUBORDINATE_IDS;
@@ -246,10 +247,6 @@ impl CellSpec {
             if !is_v4l2_video_path(camera) {
                 problems
                     .push("camera_device must name a normalized /dev/video<number> path".into());
-            } else if let Err(error) = validate_v4l2_capture_device(camera) {
-                problems.push(format!(
-                    "camera_device is not a usable V4L2 capture device: {error}"
-                ));
             }
         }
 
@@ -329,47 +326,79 @@ impl CellSpec {
 }
 
 fn is_v4l2_video_path(path: &Path) -> bool {
-    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+    let bytes = path.as_os_str().as_bytes();
+    let Some(suffix) = bytes.strip_prefix(b"/dev/video") else {
         return false;
     };
-    path.parent() == Some(Path::new("/dev"))
-        && name.strip_prefix("video").is_some_and(|suffix| {
-            !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
-        })
+    !suffix.is_empty() && suffix.iter().all(u8::is_ascii_digit)
 }
 
 pub(crate) fn validate_v4l2_capture_device(path: &Path) -> Result<(), String> {
-    let metadata = std::fs::symlink_metadata(path).map_err(|error| error.to_string())?;
-    if !metadata.file_type().is_char_device() {
-        return Err("path is not a character device".into());
+    v4l2_capture_device_numbers(path).map(|_| ())
+}
+
+/// Open and preflight one configured V4L2 node, returning its stable device
+/// numbers for creation of the cell-private node. The descriptor is opened
+/// with `O_NOFOLLOW` so validation and capability probing cannot follow a
+/// symlink supplied in place of the configured `/dev/videoN` node.
+pub(crate) fn v4l2_capture_device_numbers(path: &Path) -> Result<(u64, u64), String> {
+    if !is_v4l2_video_path(path) {
+        return Err("path must be a normalized /dev/video<number> node".into());
     }
     let file = OpenOptions::new()
         .read(true)
-        .write(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(path)
-        .or_else(|_| OpenOptions::new().read(true).open(path))
         .map_err(|error| error.to_string())?;
-    let mut capability = [0_u8; 104];
+    let metadata = file
+        .metadata()
+        .map_err(|error| error.to_string())?;
+    if !metadata.file_type().is_char_device() {
+        return Err("path is not a character device".into());
+    }
+
     // VIDIOC_QUERYCAP = _IOR('V', 0, struct v4l2_capability), whose ABI size
     // is fixed at 104 bytes on supported Linux architectures.
-    const VIDIOC_QUERYCAP: libc::c_ulong =
-        (2_u64 << 30 | 104_u64 << 16 | (b'V' as u64) << 8) as libc::c_ulong;
+    const VIDIOC_QUERYCAP: libc::c_ulong = (2_u64 << 30
+        | 104_u64 << 16
+        | (b'V' as u64) << 8) as libc::c_ulong;
     // SAFETY: capability points to a writable 104-byte v4l2_capability buffer.
+    let mut capability = [0_u8; 104];
     let result = unsafe { libc::ioctl(file.as_raw_fd(), VIDIOC_QUERYCAP, capability.as_mut_ptr()) };
     if result < 0 {
         return Err(std::io::Error::last_os_error().to_string());
     }
     let capabilities = u32::from_ne_bytes(capability[84..88].try_into().expect("fixed V4L2 ABI"));
     let device_caps = u32::from_ne_bytes(capability[88..92].try_into().expect("fixed V4L2 ABI"));
-    let effective = if capabilities & 0x8000_0000 != 0 {
+    let effective = if capabilities & V4L2_CAP_DEVICE_CAPS != 0 {
         device_caps
     } else {
         capabilities
     };
-    if effective & (0x0000_0001 | 0x0000_1000) == 0 {
-        return Err("device does not advertise video capture capability".into());
+    validate_v4l2_capabilities(effective)?;
+    Ok(linux_device_numbers(metadata.rdev()))
+}
+
+fn validate_v4l2_capabilities(capabilities: u32) -> Result<(), String> {
+    // ExternalCameraProvider requires the single-plane capture API and
+    // streaming I/O. A multi-plane-only node is deliberately rejected.
+    if capabilities & V4L2_CAP_VIDEO_CAPTURE == 0 {
+        return Err("device does not advertise single-plane video capture".into());
+    }
+    if capabilities & V4L2_CAP_STREAMING == 0 {
+        return Err("device does not advertise streaming I/O".into());
     }
     Ok(())
+}
+
+const V4L2_CAP_VIDEO_CAPTURE: u32 = 0x0000_0001;
+const V4L2_CAP_STREAMING: u32 = 0x0400_0000;
+const V4L2_CAP_DEVICE_CAPS: u32 = 0x8000_0000;
+
+fn linux_device_numbers(device: u64) -> (u64, u64) {
+    let major = ((device >> 8) & 0x0fff) | ((device >> 32) & 0xffff_f000);
+    let minor = (device & 0x00ff) | ((device >> 12) & 0xffff_ff00);
+    (major, minor)
 }
 
 fn is_normal_absolute(path: &Path) -> bool {
@@ -589,6 +618,15 @@ impl<B: CellBackend> Supervisor<B> {
         let host_uid = spec.host_uid;
         if self.cells.contains_key(&id) {
             return Err(StartError::AlreadyExists(id));
+        }
+        // Capability probing belongs to the startup transaction. Lifecycle
+        // inspection and teardown never touch a configured host device.
+        if let Some(camera) = &spec.camera_device
+            && let Err(error) = validate_v4l2_capture_device(camera)
+        {
+            return Err(StartError::InvalidSpec(SpecError {
+                problems: vec![format!("camera_device is not a usable V4L2 capture device: {error}")],
+            }));
         }
 
         let mut completed = Vec::new();
@@ -853,6 +891,53 @@ mod tests {
         let report = supervisor.teardown(&CellId::for_host_uid(1000)).unwrap();
         assert!(report.already_absent);
         assert_eq!(report.reversed_steps, 0);
+    }
+
+    #[test]
+    fn camera_path_policy_is_pure_and_does_not_require_device_presence() {
+        let mut configured = spec();
+        configured.camera_device = Some("/dev/video999999".into());
+        assert!(configured.validate().is_ok());
+
+        for path in ["/dev/video", "/dev/video-1", "/dev/video1/", "/dev/./video1", "//dev/video1", "/tmp/video1"] {
+            configured.camera_device = Some(path.into());
+            let error = configured.validate().unwrap_err();
+            assert!(error
+                .problems()
+                .iter()
+                .any(|problem| problem.contains("camera_device must name")),
+                "{path}: {error:?}");
+        }
+    }
+
+    #[test]
+    fn camera_capability_preflight_rejects_absent_or_non_v4l2_nodes() {
+        assert!(validate_v4l2_capture_device(Path::new("/dev/video999999")).is_err());
+        assert!(validate_v4l2_capture_device(Path::new("/dev/null")).is_err());
+    }
+
+    #[test]
+    fn camera_capability_policy_requires_single_plane_streaming() {
+        assert!(validate_v4l2_capabilities(V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_STREAMING).is_ok());
+        assert!(validate_v4l2_capabilities(V4L2_CAP_VIDEO_CAPTURE).is_err());
+        assert!(validate_v4l2_capabilities(0x0000_1000 | V4L2_CAP_STREAMING).is_err());
+    }
+
+    #[test]
+    fn camera_preflight_happens_before_backend_mutation_and_absent_teardown_is_safe() {
+        let mut configured = spec();
+        configured.camera_device = Some("/dev/video999999".into());
+        let mut supervisor = Supervisor::new(FakeBackend::default());
+        assert!(matches!(
+            supervisor.start(configured),
+            Err(StartError::InvalidSpec(error))
+                if error.problems().iter().any(|problem| problem.contains("camera_device"))
+        ));
+        assert!(supervisor
+            .teardown(&CellId::for_host_uid(1000))
+            .unwrap()
+            .already_absent);
+        assert!(supervisor.backend().events.is_empty());
     }
 
     #[test]

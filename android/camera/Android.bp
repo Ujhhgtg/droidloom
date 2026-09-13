@@ -1,0 +1,19 @@
+package {
+    default_applicable_licenses: ["droidloom_license"],
+}
+
+cc_library_headers {
+    name: "droidloom_camera_yuv_headers",
+    vendor_available: true,
+    export_include_dirs: ["include"],
+    visibility: ["//hardware/interfaces/camera/device/default:__pkg__"],
+}
+
+// Keep the pinned AOSP Binder provider, capture queue and JPEG implementation.
+// Droidloom supplies the cell-compatible init service and raw V4L2 adaptation.
+cc_binary {
+    name: "android.hardware.camera.provider-service.droidloom",
+    defaults: ["camera_external_service_defaults"],
+    init_rc: ["droidloom-camera.rc"],
+    vintf_fragments: ["droidloom-camera.xml"],
+}

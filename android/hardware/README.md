@@ -4,8 +4,10 @@ Android Binder service contracts and HAL build integration live here:
 
 - Composer AIDL/HWC3 transport to the private host-presenter socket;
 - GBM/DMA-BUF allocator and mapper;
-- supporting Android HAL configuration. Dedicated sensor, vibrator and camera
-  brokers are not established preview features.
+- the [V4L2 camera provider](../camera/README.md), using an explicitly selected
+  host source and Android CameraService;
+- supporting Android HAL configuration. Dedicated sensor and vibrator brokers
+  are not established preview features.
 
 The Composer path must use the protocol contract in `protocol/` and may never
 open a DRM card/KMS node.

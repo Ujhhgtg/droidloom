@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "selected_at": "2026-08-15",
-  "status": "build_proven",
+  "status": "seed_not_yet_build_proven",
   "remote_base": "https://android.googlesource.com/",
   "superproject": {
     "name": "platform/superproject",
@@ -716,9 +716,21 @@
       "path": "hardware/interfaces",
       "name": "platform/hardware/interfaces",
       "commit": "0162af698935100a590b7359581ac8b1b80693e5",
-      "purpose": "Frozen Composer and allocator AIDL interfaces",
+      "purpose": "Frozen graphics AIDL interfaces and the external camera provider implementation",
       "sparse_paths": [
         "apexkey",
+        "camera/common",
+        "camera/metadata/3.2",
+        "camera/metadata/3.3",
+        "camera/metadata/3.4",
+        "camera/metadata/3.5",
+        "camera/metadata/3.6",
+        "camera/metadata/3.7",
+        "camera/metadata/aidl",
+        "camera/device/aidl",
+        "camera/device/default",
+        "camera/provider/aidl",
+        "camera/provider/default",
         "audio/aidl",
         "bluetooth/audio/aidl/aidl_api",
         "bluetooth/audio/aidl/android",
@@ -1970,6 +1982,24 @@
       "sparse_paths": [
         "framework-s/api"
       ]
+    },
+    {
+      "path": "external/libexif",
+      "name": "platform/external/libexif",
+      "commit": "e180c53a25cc0f26e6e0caf4a2708c41b8ec5214",
+      "purpose": "EXIF metadata for the AIDL external camera provider JPEG encoder"
+    },
+    {
+      "path": "external/libjpeg-turbo",
+      "name": "platform/external/libjpeg-turbo",
+      "commit": "a83d12ab3266dae9a9a0ab8f3c1799459d24ed96",
+      "purpose": "JPEG decode and encode for the AIDL external camera provider"
+    },
+    {
+      "path": "external/libyuv",
+      "name": "platform/external/libyuv",
+      "commit": "49130481509c59cdd486a05595fd809adafedf39",
+      "purpose": "Camera HAL YUV conversion, scaling and JPEG input support"
     },
     {
       "path": "external/libfuse",

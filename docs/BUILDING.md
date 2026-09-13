@@ -117,6 +117,13 @@ podman info
 Resolve any rootless Podman setup error before building; do not switch to a sudo
 build. Internet access is required for the initial container and pinned inputs.
 
+The package container uses host networking so a desktop proxy bound to loopback
+remains reachable. Android CI URLs serve an artifact viewer: the downloader
+parses its JSON to obtain the signed Google Storage URL, then verifies the
+archive against the pinned SHA-256 before extraction. A verified archive works
+offline. AOSP Git fetches use HTTP/1.1 for proxies that stall HTTP/2 upload-pack
+responses; source revisions remain pinned.
+
 ## 2. Get the source
 
 ```console

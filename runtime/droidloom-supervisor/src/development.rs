@@ -97,6 +97,14 @@ pub enum DevelopmentError {
 /// image formats, non-device render paths, and non-socket Denial endpoints.
 pub fn validate_development_inputs(spec: &CellSpec) -> Result<(), DevelopmentError> {
     spec.validate()?;
+    if let Some(camera) = &spec.camera_device {
+        crate::validate_v4l2_capture_device(camera).map_err(|error| {
+            DevelopmentError::InvalidInput(format!(
+                "camera device {} is not usable: {error}",
+                camera.display()
+            ))
+        })?;
+    }
     for path in spec.graphics_backend.auxiliary_devices() {
         auxiliary_graphics_device_numbers(Path::new(path))?;
     }
@@ -1573,17 +1581,15 @@ fn create_private_dev(spec: &CellSpec, root: &Path) -> Result<(), DevelopmentErr
     // exposed unless the cell specification names one and validation proves
     // it supports V4L2 capture.
     if let Some(camera) = &spec.camera_device {
-        crate::validate_v4l2_capture_device(camera).map_err(|error| {
+        let (major, minor) = crate::v4l2_capture_device_numbers(camera).map_err(|error| {
             DevelopmentError::InvalidInput(format!(
-                "camera device {} is not usable: {error}",
+                "camera device {} disappeared or became unusable: {error}",
                 camera.display()
             ))
         })?;
-        let metadata =
-            fs::metadata(camera).map_err(|source| io_error("stat camera device", source))?;
-        let (major, minor) = linux_device_numbers(metadata.rdev());
+        let camera_target = dev.join("video0");
         make_device_node(
-            &dev.join("video0"),
+            &camera_target,
             "c",
             u32::try_from(major).map_err(|_| {
                 DevelopmentError::InvalidInput("camera major exceeds 32-bit range".into())
@@ -1591,8 +1597,12 @@ fn create_private_dev(spec: &CellSpec, root: &Path) -> Result<(), DevelopmentErr
             u32::try_from(minor).map_err(|_| {
                 DevelopmentError::InvalidInput("camera minor exceeds 32-bit range".into())
             })?,
-            "666",
+            "660",
         )?;
+        // Android's cameraserver (1047) accesses the node through the camera
+        // group (1006). This is a private inode, so ownership does not alter
+        // permissions on the host's V4L2 device.
+        set_owner(&camera_target, 1047, 1006)?;
     }
 
     // The pinned CI base contains ext4-payload APEX packages. apexd obtains

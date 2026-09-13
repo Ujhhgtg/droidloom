@@ -39,6 +39,11 @@ and `droidloomd` remain trusted computing base.
 - The host compositor's private control channels and compositor-owned buffers;
 - package-owned immutable Android system content.
 
+Camera access is an explicit exception: `camera_device` selects one host V4L2
+capture source for the cell. The provider receives only that private device node;
+Android app access still goes through CameraService and its camera permissions.
+The host `/dev` tree and other cameras remain private.
+
 ## Mandatory controls
 
 1. Map Android IDs into a dedicated, non-overlapping subordinate range. Never

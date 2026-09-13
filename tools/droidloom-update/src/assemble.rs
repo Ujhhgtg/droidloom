@@ -42,22 +42,80 @@ pub(crate) fn download(url: &str, path: &Path, expected: &str) -> Result<()> {
 }
 
 fn public_artifact_url(page_url: &str, artifact: &str) -> Result<String> {
-    let page = output(Command::new("curl").args(["--fail", "--location", "--retry", "3", "--silent", page_url]))?;
-    let marker = "\"artifactUrl\":\"";
-    let start = page
-        .find(marker)
-        .ok_or_else(|| format!("Android CI artifact page has no artifactUrl for {artifact}"))?
-        + marker.len();
-    let end = page[start..]
-        .find("\"")
-        .ok_or("Android CI artifact URL is truncated")?
-        + start;
-    let encoded = &page[start..end];
-    let url: String = serde_json::from_str(&format!("\"{encoded}\""))?;
-    if !url.ends_with(artifact) && !url.contains(&format!("/{artifact}?")) {
+    let page = output(Command::new("curl").args([
+        "--fail",
+        "--location",
+        "--retry",
+        "3",
+        "--silent",
+        page_url,
+    ]))?;
+    parse_public_artifact_url(&page, artifact)
+}
+
+fn parse_public_artifact_url(page: &str, artifact: &str) -> Result<String> {
+    // The public endpoint serves a viewer, not the archive. Its JSVariables
+    // assignment contains JSON, including escaped '&' in the signed GCS URL.
+    let data = page
+        .match_indices("JSVariables")
+        .find_map(|(offset, variable)| {
+            let preceding = page[..offset].chars().next_back();
+            if preceding.is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '$') {
+                return None;
+            }
+            page[offset + variable.len()..]
+                .trim_start()
+                .strip_prefix('=')
+                .map(str::trim_start)
+        })
+        .ok_or("Android CI artifact page has no JSVariables assignment")?;
+    let mut values = serde_json::Deserializer::from_str(data).into_iter::<Value>();
+    let variables = values.next().ok_or("Android CI artifact data is empty")??;
+    if !data[values.byte_offset()..].trim_start().starts_with(';') {
+        return fail("Android CI artifact data is not a JSON assignment");
+    }
+    if variables["artifact"].as_str() != Some(artifact) {
         return fail("Android CI artifact page returned a different artifact");
     }
-    Ok(url)
+    let url = variables["artifactUrl"]
+        .as_str()
+        .ok_or("Android CI artifact page has no artifactUrl")?;
+    // Require the exact public storage authority and bucket, not a matching
+    // hostname substring or an artifact name hidden in a query parameter.
+    let object = url
+        .strip_prefix("https://storage.googleapis.com/android-build/")
+        .ok_or("Android CI artifact URL is not on trusted HTTPS storage")?;
+    if url
+        .chars()
+        .any(|c| c.is_control() || c.is_whitespace() || c == '\\' || c == '#')
+    {
+        return fail("Android CI artifact URL contains invalid characters");
+    }
+    let path = object.split_once('?').map_or(object, |(path, _)| path);
+    if path
+        .split('/')
+        .any(|part| part.is_empty() || part == "." || part == "..")
+        || !path
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || b"/._-".contains(&c))
+        || path.rsplit('/').next() != Some(artifact)
+    {
+        return fail("Android CI artifact URL returned a different artifact");
+    }
+    Ok(url.to_owned())
+}
+
+fn download_public_artifact(
+    page_url: &str,
+    artifact: &str,
+    archive: &Path,
+    expected: &str,
+) -> Result<()> {
+    // A verified cache must work offline and must not need a fresh signed URL.
+    if archive.is_file() && hash(archive)? == expected {
+        return Ok(());
+    }
+    download(&public_artifact_url(page_url, artifact)?, archive, expected)
 }
 fn extract(image: &Path, destination: &Path) -> Result<()> {
     fs::create_dir_all(destination)?;
@@ -123,12 +181,12 @@ fn prepare_inputs_from(
         path
     } else {
         let archive = repo.join(".work").join(&typed.aosp_ci_base.artifact_name);
-        // Public redirect endpoint used by Android's kleaf kernel_prebuilt_repo.bzl.
-        let url = public_artifact_url(
+        download_public_artifact(
             &typed.aosp_ci_base.artifact_page_url,
             &typed.aosp_ci_base.artifact_name,
+            &archive,
+            &typed.aosp_ci_base.artifact_sha256,
         )?;
-        download(&url, &archive, &typed.aosp_ci_base.artifact_sha256)?;
         if base.exists() {
             fs::remove_dir_all(&base)?;
         }
@@ -609,6 +667,118 @@ fn preserve_settings(spec: &mut Value, existing: &Value, uid: u32) -> Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn public_artifact_page_decodes_json_escapes_and_whitespace() {
+        let page = r#"<!doctype html><script>
+            var JSVariables  = {
+                "artifact" : "phone-img-123.zip",
+                "artifactUrl" : "https:\/\/storage.googleapis.com/android-build/builds/123/phone-img-123.zip?Expires=456\u0026Signature=a%2Bb\u003d"
+            } ;
+            app.store = JSVariables;
+        </script>"#;
+        assert_eq!(
+            parse_public_artifact_url(page, "phone-img-123.zip").unwrap(),
+            "https://storage.googleapis.com/android-build/builds/123/phone-img-123.zip?Expires=456&Signature=a%2Bb="
+        );
+    }
+
+    fn artifact_page(artifact: &str, url: &str) -> String {
+        format!(
+            "<script>var JSVariables = {}; app.store = JSVariables;</script>",
+            json!({"artifact": artifact, "artifactUrl": url})
+        )
+    }
+
+    #[test]
+    fn public_artifact_page_requires_matching_artifact_and_storage_object() {
+        let artifact = "phone-img-123.zip";
+        let url = "https://storage.googleapis.com/android-build/builds/123/phone-img-123.zip";
+        assert!(parse_public_artifact_url(&artifact_page(artifact, url), artifact).is_ok());
+        assert!(parse_public_artifact_url(&artifact_page("other.zip", url), artifact).is_err());
+        for wrong in [
+            "https://storage.googleapis.com/android-build/builds/123/other.zip",
+            "https://storage.googleapis.com/android-build/builds/123/not-phone-img-123.zip",
+            "https://storage.googleapis.com/android-build/builds/123/other.zip?redirect=/phone-img-123.zip?download=1",
+            "https://storage.googleapis.com/android-build/builds/123/phone-img-123.zip/extra",
+        ] {
+            assert!(
+                parse_public_artifact_url(&artifact_page(artifact, wrong), artifact).is_err(),
+                "accepted a different storage object: {wrong}"
+            );
+        }
+    }
+
+    #[test]
+    fn public_artifact_page_rejects_untrusted_or_ambiguous_urls() {
+        let artifact = "phone-img-123.zip";
+        for url in [
+            "http://storage.googleapis.com/android-build/phone-img-123.zip",
+            "https://storage.googleapis.com.attacker.invalid/android-build/phone-img-123.zip",
+            "https://storage.googleapis.com@attacker.invalid/android-build/phone-img-123.zip",
+            "https://storage.googleapis.com/other-bucket/phone-img-123.zip",
+            "https://storage.googleapis.com/android-build/../other-bucket/phone-img-123.zip",
+            "https://storage.googleapis.com/android-build/%2e%2e/phone-img-123.zip",
+            "https://storage.googleapis.com/android-build/phone-img-123.zip#ignored",
+            "https://storage.googleapis.com/android-build/phone-img-123.zip?signature=bad\nvalue",
+            "https://storage.googleapis.com/android-build/phone-img-123.zip?signature=bad\\value",
+            "file:///tmp/phone-img-123.zip",
+        ] {
+            assert!(
+                parse_public_artifact_url(&artifact_page(artifact, url), artifact).is_err(),
+                "accepted unsafe artifact URL: {url:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn public_artifact_page_rejects_missing_malformed_or_non_json_data() {
+        for page in [
+            "<html>Sign in to access this artifact</html>",
+            r#"var JSVariables = {"artifact":"phone-img-123.zip","artifactUrl":"truncated"#,
+            r#"var JSVariables = {"artifact":"phone-img-123.zip",};"#,
+            r#"var JSVariables = {"artifact":"phone-img-123.zip","artifactUrl":null};"#,
+            r#"var JSVariables = {"artifact":"phone-img-123.zip"} + otherData;"#,
+            r#"var notJSVariables = {"artifact":"phone-img-123.zip"};"#,
+        ] {
+            assert!(parse_public_artifact_url(page, "phone-img-123.zip").is_err());
+        }
+    }
+
+    #[test]
+    fn verified_public_artifact_cache_does_not_resolve_a_url() {
+        let temporary = tempfile::tempdir().unwrap();
+        let archive = temporary.path().join("phone-img-123.zip");
+        fs::write(&archive, b"verified cached archive").unwrap();
+        let expected = hash(&archive).unwrap();
+        // This is intentionally not a fetchable URL. Any resolver call fails.
+        download_public_artifact(
+            "invalid://offline",
+            "phone-img-123.zip",
+            &archive,
+            &expected,
+        )
+        .unwrap();
+        assert_eq!(fs::read(&archive).unwrap(), b"verified cached archive");
+    }
+
+    #[test]
+    fn artifact_download_rejects_corrupt_bytes_without_replacing_the_archive() {
+        let temporary = tempfile::tempdir().unwrap();
+        let source = temporary.path().join("wrong.zip");
+        let archive = temporary.path().join("cached.zip");
+        fs::write(&source, b"HTML artifact viewer instead of zip bytes").unwrap();
+        fs::write(&archive, b"previous archive").unwrap();
+        let error = download(
+            &format!("file://{}", source.display()),
+            &archive,
+            &"0".repeat(64),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("checksum mismatch"));
+        assert_eq!(fs::read(&archive).unwrap(), b"previous archive");
+    }
+
     #[test]
     fn update_keeps_personal_state_but_replaces_runtime_mappings() {
         let existing = json!({"host_uid":1000,"data_dir":"/var/lib/droidloom/custom-data","shared_storage_directories":[{"source":"/home/test/Downloads"}],"android_file_overrides":["old"]});

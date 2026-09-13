@@ -3,7 +3,8 @@ name = "droidloom-source"
 description = "Materialize the exact sparse AOSP source boundary for Droidloom"
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
+# std::fs::File locking keeps source staging recoverable after process death.
+rust-version = "1.89"
 license.workspace = true
 repository.workspace = true
 

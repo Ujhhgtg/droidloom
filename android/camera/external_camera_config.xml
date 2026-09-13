@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ExternalCamera>
+    <Provider>
+        <CameraIdOffset>0</CameraIdOffset>
+        <!-- The runtime exposes only the explicitly selected host node as video0. -->
+        <ignore />
+    </Provider>
+    <Device>
+        <MaxJpegBufferSize bytes="8388608" />
+        <NumVideoBuffers count="4" />
+        <NumStillBuffers count="2" />
+        <FpsList>
+            <Limit width="4096" height="4096" fpsBound="60.0" />
+        </FpsList>
+        <Depth16Supported enabled="false" />
+        <MinimumStreamSize width="160" height="120" />
+        <!-- Host frames are already upright; no sensor rotation is needed. -->
+        <Orientation degree="0" />
+        <!-- Droidloom's mapped phone feed is a user-facing camera. -->
+        <LensFacing value="front" />
+    </Device>
+</ExternalCamera>

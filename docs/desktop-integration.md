@@ -13,6 +13,36 @@ Compositor sizes take precedence; restart preserves the mode. `window-mode`
 supports per-app preferences. Android's privileged task-resize API updates task
 configuration and crop. See [insets and resizing](contracts/navigation-insets.md).
 
+## Camera
+
+Droidloom's [camera provider](../android/camera/README.md) exposes one explicitly
+selected host V4L2 capture source through Android Camera/Camera2. Set
+`"camera_device": "/dev/video10"` in `/etc/droidloom/cell.json` to select a source;
+the cell sees only `/dev/video0`. Omit the setting to expose no camera. Package
+upgrades preserve the selection. Changes take effect on the next Droidloom start.
+
+For a phone's front camera, create a V4L2 loopback device and start the producer
+before Droidloom. On Arch, install `v4l2loopback-dkms`, the matching kernel headers
+and `scrcpy`. Loading the module needs administrator access:
+
+```console
+pkexec modprobe v4l2loopback video_nr=10 card_label="Droidloom Phone Camera" exclusive_caps=1
+scrcpy --serial PHONE_SERIAL --video-source=camera --camera-facing=front \
+  --camera-size=1280x960 --camera-fps=30 --v4l2-sink=/dev/video10 \
+  --no-window --no-audio --no-control
+```
+
+Choose a capture size supported by `scrcpy --list-camera-sizes`; camera capture
+requires Android 12 or newer on the phone. The stream must already advertise
+V4L2 single-plane capture and streaming when Droidloom starts. The HAL accepts
+MJPEG or raw YU12 color frames and exposes the configured feed as front-facing.
+App camera permissions still apply. Disconnecting the producer interrupts active
+capture; removing the setting stops camera exposure on the next cell start.
+
+The host node's existence alone does not prove Android capture works. Check
+`dumpsys media.camera` inside the cell and use the Camera2 probe in
+`android/camera/tests/probe` to confirm repeated frames through CameraService.
+
 ## Clipboard
 
 The presenter exchanges clipboard changes with an adapter in Android SystemUI.

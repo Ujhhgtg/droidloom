@@ -21,10 +21,12 @@ use tempfile::Builder;
 use thiserror::Error;
 
 const MAX_LOCK_BYTES: u64 = 1024 * 1024;
-const MAX_PROJECTS: usize = 224;
+const MAX_PROJECTS: usize = 256;
 const MAX_LINKS: usize = 64;
-const MAX_SPARSE_PATHS: usize = 128;
+const MAX_SPARSE_PATHS: usize = 144;
 const OFFICIAL_REMOTE: &str = "https://android.googlesource.com/";
+const STAGING_MARKER: &str = ".droidloom-source-staging.json";
+const FETCH_ATTEMPTS: usize = 3;
 
 /// Exact sparse-source lock selected for one milestone.
 #[derive(Clone, Debug, Deserialize)]
@@ -150,6 +152,30 @@ pub struct MaterializedManifest {
     pub source_lock_sha256: String,
     /// Fully validated immutable plan.
     pub plan: MaterializationPlan,
+}
+
+/// Ownership record for a resumable staging directory.  A staging directory
+/// is only ever reused when this record still matches the exact lock and plan
+/// that created it; this prevents accidentally treating an unrelated sibling
+/// directory as ours.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct StagingMarker {
+    schema_version: u32,
+    source_lock_sha256: String,
+    plan: MaterializationPlan,
+}
+
+struct StagingLock {
+    // The kernel releases the lock on exit, including crashes and SIGKILL.
+    // Keeping the descriptor open also works after the staging tree is renamed.
+    _file: fs::File,
+}
+
+impl Drop for StagingLock {
+    fn drop(&mut self) {
+        let _ = self._file.unlock();
+    }
 }
 
 /// Invalid input, local I/O, or exact Git operation failure.
@@ -391,8 +417,9 @@ fn validate_links(lock: &SparseSourceLock, problems: &mut Vec<String>) {
 
 /// Fetch, verify, link, and atomically publish one sparse source tree.
 ///
-/// The output must not exist. A failure before publication removes the staging
-/// directory and never exposes a partial source tree at the destination.
+/// The output must not exist.  A failure leaves a deterministic, owned sibling
+/// staging directory behind so a later invocation can resume completed
+/// projects instead of throwing away a large checkout.
 ///
 /// # Errors
 ///
@@ -404,7 +431,7 @@ pub fn materialize(
     destination: &Path,
 ) -> Result<MaterializedManifest, SourceError> {
     let plan = build_plan(lock)?;
-    if destination.exists() {
+    if fs::symlink_metadata(destination).is_ok() {
         return Err(SourceError::Invalid(vec![format!(
             "destination {} already exists",
             destination.display()
@@ -415,28 +442,29 @@ pub fn materialize(
         .filter(|path| !path.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(parent).map_err(|source| io_error("create output parent", source))?;
-    let staging = Builder::new()
-        .prefix(".droidloom-source-")
-        .tempdir_in(parent)
-        .map_err(|source| io_error("create source staging directory", source))?;
+    let lock_hash = sha256_file(lock_path)?;
+    let staging_path = staging_path(destination);
+    prepare_staging(&staging_path, &plan, &lock_hash)?;
+    let staging_lock = acquire_staging_lock(&staging_path)?;
 
     for project in &plan.projects {
-        materialize_project(staging.path(), project)?;
+        materialize_project_resumable(&staging_path, project)?;
     }
     for link in &plan.links {
-        create_root_link(staging.path(), link)?;
+        ensure_root_link(&staging_path, link)?;
     }
 
     let manifest = MaterializedManifest {
         schema_version: 1,
-        source_lock_sha256: sha256_file(lock_path)?,
+        source_lock_sha256: lock_hash,
         plan,
     };
     let json = serde_json::to_vec_pretty(&manifest)
         .map_err(|error| SourceError::Invalid(vec![format!("serialize manifest: {error}")]))?;
-    fs::write(staging.path().join(".droidloom-source-manifest.json"), json)
+    fs::write(staging_path.join(".droidloom-source-manifest.json"), json)
         .map_err(|source| io_error("write materialized manifest", source))?;
-    fs::rename(staging.path(), destination)
+    drop(staging_lock);
+    fs::rename(&staging_path, destination)
         .map_err(|source| io_error("publish sparse source tree atomically", source))?;
     Ok(manifest)
 }
@@ -627,6 +655,180 @@ fn verify_project(checkout: &Path, project: &PlannedProject) -> Result<(), Sourc
     Ok(())
 }
 
+fn staging_path(destination: &Path) -> PathBuf {
+    let name = destination
+        .file_name()
+        .and_then(OsStr::to_str)
+        .unwrap_or("source");
+    destination
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+        .join(format!(".{name}.droidloom-source-staging"))
+}
+
+fn prepare_staging(
+    path: &Path,
+    plan: &MaterializationPlan,
+    lock_hash: &str,
+) -> Result<(), SourceError> {
+    let marker = path.join(STAGING_MARKER);
+    if let Ok(metadata) = fs::symlink_metadata(path) {
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(SourceError::Invalid(vec![format!(
+                "staging path {} exists and is not a directory",
+                path.display()
+            )]));
+        }
+        let bytes = fs::read(&marker)
+            .map_err(|source| io_error("read existing source staging ownership marker", source))?;
+        let existing = serde_json::from_slice::<StagingMarker>(&bytes).map_err(|source| {
+            SourceError::Json {
+                path: marker.clone(),
+                source,
+            }
+        })?;
+        let expected = StagingMarker {
+            schema_version: 1,
+            source_lock_sha256: lock_hash.to_owned(),
+            plan: plan.clone(),
+        };
+        if existing != expected {
+            return Err(SourceError::Invalid(vec![format!(
+                "staging path {} is owned by a different lock or plan",
+                path.display()
+            )]));
+        }
+        return Ok(());
+    }
+
+    fs::create_dir(path).map_err(|source| io_error("create source staging directory", source))?;
+    let expected = StagingMarker {
+        schema_version: 1,
+        source_lock_sha256: lock_hash.to_owned(),
+        plan: plan.clone(),
+    };
+    let bytes = serde_json::to_vec_pretty(&expected).map_err(|error| {
+        SourceError::Invalid(vec![format!("serialize staging marker: {error}")])
+    })?;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&marker)
+        .map_err(|source| io_error("create source staging ownership marker", source))?;
+    file.write_all(&bytes)
+        .and_then(|()| file.sync_all())
+        .map_err(|source| io_error("write source staging ownership marker", source))?;
+    Ok(())
+}
+
+fn acquire_staging_lock(staging: &Path) -> Result<StagingLock, SourceError> {
+    let path = staging.join(".droidloom-source.lock");
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)
+        .map_err(|error| io_error("open source staging lock", error))?;
+    file.try_lock().map_err(|error| {
+        SourceError::Invalid(vec![format!(
+            "cannot exclusively lock source staging {}: {error}",
+            staging.display()
+        )])
+    })?;
+    Ok(StagingLock { _file: file })
+}
+
+fn materialize_project_resumable(root: &Path, project: &PlannedProject) -> Result<(), SourceError> {
+    let checkout = root.join(&project.path);
+    if !checkout.exists() {
+        return materialize_project(root, project);
+    }
+    if fs::symlink_metadata(&checkout)
+        .map_err(|source| io_error("stat resumable project checkout", source))?
+        .file_type()
+        .is_symlink()
+    {
+        return Err(SourceError::Invalid(vec![format!(
+            "project {} staging path is a symlink",
+            project.path.display()
+        )]));
+    }
+    // A complete checkout is reused after checking the exact invariants.  A
+    // clean but interrupted Git checkout can safely continue fetching in place.
+    if verify_project(&checkout, project).is_ok() {
+        if !project.sparse_paths.is_empty() {
+            apply_sparse_checkout(&checkout, project)?;
+            verify_project(&checkout, project)?;
+        }
+        eprintln!("Reusing {} at {}", project.path.display(), project.commit);
+        return Ok(());
+    }
+    // A clean checkout at a different, valid commit is not an interrupted
+    // fetch.  Refuse to move it: even though the directory is staging-owned,
+    // this fail-closed check avoids silently resetting a user-modified tree.
+    if let Ok(head) = run_git_output(&checkout, &[OsStr::new("rev-parse"), OsStr::new("HEAD")]) {
+        let actual = String::from_utf8_lossy(&head.stdout).trim().to_owned();
+        if is_commit(&actual) && actual != project.commit {
+            return Err(SourceError::RevisionMismatch {
+                path: project.path.clone(),
+                expected: project.commit.clone(),
+                actual,
+            });
+        }
+    }
+    if checkout.join(".git").exists() {
+        let remote = run_git_output(
+            &checkout,
+            &[
+                OsStr::new("remote"),
+                OsStr::new("get-url"),
+                OsStr::new("origin"),
+            ],
+        );
+        if let Ok(remote) = remote {
+            if String::from_utf8_lossy(&remote.stdout).trim() != project.url {
+                return Err(SourceError::Invalid(vec![format!(
+                    "project {} origin does not match {}, refusing to reset staging checkout",
+                    project.path.display(),
+                    project.url
+                )]));
+            }
+            let status = run_git_output(
+                &checkout,
+                &[OsStr::new("status"), OsStr::new("--porcelain")],
+            )?;
+            if !status.stdout.is_empty() {
+                return Err(SourceError::Invalid(vec![format!(
+                    "project {} staging checkout has local changes; refusing to reset it",
+                    project.path.display()
+                )]));
+            }
+            return continue_project_fetch(&checkout, project);
+        }
+    }
+    Err(SourceError::Invalid(vec![format!(
+        "project {} staging checkout is not a resumable Git repository",
+        project.path.display()
+    )]))
+}
+
+fn continue_project_fetch(checkout: &Path, project: &PlannedProject) -> Result<(), SourceError> {
+    apply_sparse_checkout(checkout, project)?;
+    fetch_exact(checkout, project)?;
+    run_git(
+        checkout,
+        &[
+            OsStr::new("checkout"),
+            OsStr::new("--quiet"),
+            OsStr::new("--detach"),
+            OsStr::new("FETCH_HEAD"),
+        ],
+    )?;
+    verify_project(checkout, project)
+}
+
 fn install_missing_project(root: &Path, project: &PlannedProject) -> Result<(), SourceError> {
     let parent = root
         .parent()
@@ -707,6 +909,7 @@ fn write_manifest_atomically(
 }
 
 fn materialize_project(root: &Path, project: &PlannedProject) -> Result<(), SourceError> {
+    eprintln!("Fetching {} at {}", project.path.display(), project.commit);
     let checkout = root.join(&project.path);
     let parent = checkout
         .parent()
@@ -731,17 +934,7 @@ fn materialize_project(root: &Path, project: &PlannedProject) -> Result<(), Sour
         ],
     )?;
     apply_sparse_checkout(&checkout, project)?;
-    run_git(
-        &checkout,
-        &[
-            OsStr::new("fetch"),
-            OsStr::new("--quiet"),
-            OsStr::new("--depth=1"),
-            OsStr::new("--filter=blob:none"),
-            OsStr::new("origin"),
-            OsStr::new(&project.commit),
-        ],
-    )?;
+    fetch_exact(&checkout, project)?;
     run_git(
         &checkout,
         &[
@@ -761,6 +954,41 @@ fn materialize_project(root: &Path, project: &PlannedProject) -> Result<(), Sour
         });
     }
     Ok(())
+}
+
+fn fetch_exact(checkout: &Path, project: &PlannedProject) -> Result<(), SourceError> {
+    let mut args = vec![OsStr::new("fetch"), OsStr::new("--quiet"), OsStr::new("--depth=1")];
+    // Clang is a large prebuilt tree; lazy blob fetches trigger an extra
+    // proxy RPC per tool and are prone to truncated pack responses.
+    if project.path.as_path() != Path::new("prebuilts/clang/host/linux-x86") {
+        args.push(OsStr::new("--filter=blob:none"));
+    } else {
+        // An earlier interrupted partial fetch may have marked origin as a
+        // promisor. Remove that marker so checkout cannot launch a second,
+        // per-blob filtered RPC after the complete pack arrives.
+        let _ = run_git(checkout, &[OsStr::new("config"), OsStr::new("--unset-all"), OsStr::new("remote.origin.promisor")]);
+        let _ = run_git(checkout, &[OsStr::new("config"), OsStr::new("--unset-all"), OsStr::new("remote.origin.partialclonefilter")]);
+        let _ = run_git(checkout, &[OsStr::new("config"), OsStr::new("--unset"), OsStr::new("extensions.partialclone")]);
+    }
+    args.extend([OsStr::new("origin"), OsStr::new(&project.commit)]);
+    let mut last_error = None;
+    for attempt in 1..=FETCH_ATTEMPTS {
+        eprintln!(
+            "Fetching {} at {} (attempt {attempt}/{FETCH_ATTEMPTS})",
+            project.path.display(),
+            project.commit
+        );
+        match run_git(checkout, &args) {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                last_error = Some(error);
+                if attempt < FETCH_ATTEMPTS {
+                    eprintln!("Fetch failed; retaining staging checkout for retry");
+                }
+            }
+        }
+    }
+    Err(last_error.expect("fetch attempts always run"))
 }
 
 fn apply_sparse_checkout(checkout: &Path, project: &PlannedProject) -> Result<(), SourceError> {
@@ -859,7 +1087,20 @@ fn run_git(checkout: &Path, args: &[&OsStr]) -> Result<(), SourceError> {
 }
 
 fn run_git_output(checkout: &Path, args: &[&OsStr]) -> Result<Output, SourceError> {
-    let mut all_args = vec![OsStr::new("-C"), checkout.as_os_str()];
+    // Some desktop HTTP proxies stall the HTTP/2 Git upload-pack response.
+    // Apply this to checkout too: a partial clone fetches blobs lazily there.
+    let mut all_args = vec![
+        OsStr::new("-c"),
+        OsStr::new("http.version=HTTP/1.1"),
+        OsStr::new("-c"),
+        OsStr::new("http.lowSpeedLimit=1024"),
+        OsStr::new("-c"),
+        OsStr::new("http.lowSpeedTime=600"),
+        OsStr::new("-c"),
+        OsStr::new("http.postBuffer=524288000"),
+        OsStr::new("-C"),
+        checkout.as_os_str(),
+    ];
     all_args.extend_from_slice(args);
     run_output("git", &all_args)
 }
@@ -1087,6 +1328,92 @@ mod tests {
                 .file_type()
                 .is_symlink()
         );
+    }
+
+    #[test]
+    fn interrupted_project_fetch_resumes_from_owned_checkout() {
+        let sandbox = tempfile::tempdir().unwrap();
+        let origin = sandbox.path().join("origin-real");
+        run(
+            "git",
+            &[
+                OsStr::new("init"),
+                OsStr::new("--quiet"),
+                OsStr::new("--initial-branch=main"),
+                origin.as_os_str(),
+            ],
+        )
+        .unwrap();
+        run_git(
+            &origin,
+            &[
+                OsStr::new("config"),
+                OsStr::new("user.email"),
+                OsStr::new("test@droidloom.invalid"),
+            ],
+        )
+        .unwrap();
+        run_git(
+            &origin,
+            &[
+                OsStr::new("config"),
+                OsStr::new("user.name"),
+                OsStr::new("Droidloom Test"),
+            ],
+        )
+        .unwrap();
+        fs::write(origin.join("marker"), b"resume").unwrap();
+        run_git(&origin, &[OsStr::new("add"), OsStr::new("marker")]).unwrap();
+        run_git(
+            &origin,
+            &[
+                OsStr::new("commit"),
+                OsStr::new("--quiet"),
+                OsStr::new("-m"),
+                OsStr::new("fixture"),
+            ],
+        )
+        .unwrap();
+        let commit = String::from_utf8(
+            run_git_output(&origin, &[OsStr::new("rev-parse"), OsStr::new("HEAD")])
+                .unwrap()
+                .stdout,
+        )
+        .unwrap()
+        .trim()
+        .to_owned();
+        let missing = sandbox.path().join("origin-missing");
+        let root = sandbox.path().join("staging");
+        fs::create_dir(&root).unwrap();
+        let project = PlannedProject {
+            path: "platform/test".into(),
+            url: missing.to_string_lossy().into_owned(),
+            commit,
+            purpose: "resume fixture".into(),
+            sparse_paths: Vec::new(),
+        };
+        assert!(materialize_project_resumable(&root, &project).is_err());
+        assert!(root.join("platform/test/.git").exists());
+        fs::rename(&origin, &missing).unwrap();
+        materialize_project_resumable(&root, &project).unwrap();
+        assert_eq!(
+            fs::read(root.join("platform/test/marker")).unwrap(),
+            b"resume"
+        );
+    }
+
+    #[test]
+    fn staging_lock_excludes_concurrent_runs_and_survives_rename() {
+        let sandbox = tempfile::tempdir().unwrap();
+        let staging = sandbox.path().join("staging");
+        fs::create_dir(&staging).unwrap();
+        let first = acquire_staging_lock(&staging).unwrap();
+        assert!(acquire_staging_lock(&staging).is_err());
+        let renamed = sandbox.path().join("renamed");
+        fs::rename(&staging, &renamed).unwrap();
+        drop(first);
+        let second = acquire_staging_lock(&renamed).unwrap();
+        drop(second);
     }
 
     #[test]

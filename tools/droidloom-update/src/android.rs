@@ -9,6 +9,7 @@ use std::{
 pub const TARGETS: &[&str] = &[
     "droidloom-native-bridge",
     "android.hardware.graphics.composer3-service.droidloom",
+    "android.hardware.camera.provider-service.droidloom",
     "droidloom-task-launcher",
     "droidloom-input-bridge",
     "DroidloomIME",
@@ -61,6 +62,10 @@ pub fn apex_output(name: &str) -> Option<&'static str> {
     }
 }
 const PATCHES: &[(&str, &str)] = &[
+    (
+        "hardware/interfaces",
+        "android/camera/0001-droidloom-v4l2-camera-input.patch",
+    ),
     (
         "frameworks/native",
         "android/surfaceflinger/0009-droidloom-cpu-placement.patch",
@@ -570,6 +575,7 @@ pub fn build_targets(
         "android/native-bridge",
         "android/selinux-compat",
         "android/device",
+        "android/camera",
         "device",
         "android/mesa",
     ] {

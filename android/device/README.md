@@ -20,3 +20,6 @@ building only `vendorimage` does not activate translation.
 ARM64 retains a specialist build/deployment workflow. See
 [current limitations](../../docs/desktop-integration.md#current-limitations); product definitions
 alone do not establish hardware compatibility.
+
+Both products include the [host camera provider](../camera/README.md), which
+captures an explicitly mapped V4L2 source through the AOSP AIDL camera service.
