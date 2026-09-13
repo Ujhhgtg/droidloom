@@ -9,7 +9,7 @@ use std::{
 pub const TARGETS: &[&str] = &[
     "droidloom-native-bridge",
     "android.hardware.graphics.composer3-service.droidloom",
-    "android.hardware.camera.provider-service.droidloom",
+    "android.hardware.camera.provider-V1-external-service",
     "droidloom-task-launcher",
     "droidloom-input-bridge",
     "DroidloomIME",
