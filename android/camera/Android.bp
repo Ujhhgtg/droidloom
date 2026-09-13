@@ -15,9 +15,9 @@ cc_library_headers {
 // closure explicit for the rebuilt cameraserver.
 cc_library_shared {
     name: "libcameracompatbilityinfo",
-    srcs: ["camera_compat_stub.cpp", "aidl/android/content/res/CameraCompatibilityInfo.aidl"],
+    srcs: ["camera_compat_stub.cpp", "android/content/res/CameraCompatibilityInfo.aidl"],
     aidl: {
-        local_include_dirs: ["aidl"],
+        local_include_dirs: ["."],
         export_aidl_headers: true,
     },
     vendor: true,
