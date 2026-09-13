@@ -9,7 +9,7 @@ use std::{
 pub const TARGETS: &[&str] = &[
     "droidloom-native-bridge",
     "android.hardware.graphics.composer3-service.droidloom",
-    "android.hardware.camera.provider@2.4-external-service",
+    "android.hardware.camera.provider-V1-external-service",
     "droidloom-task-launcher",
     "droidloom-input-bridge",
     "DroidloomIME",
@@ -65,14 +65,6 @@ const PATCHES: &[(&str, &str)] = &[
     (
         "hardware/interfaces",
         "android/camera/0001-droidloom-v4l2-camera-input.patch",
-    ),
-    (
-        "hardware/interfaces",
-        "android/camera/0002-droidloom-hidl-external-camera-yuv.patch",
-    ),
-    (
-        "hardware/interfaces",
-        "android/camera/0003-droidloom-hidl-external-service-64.patch",
     ),
     (
         "frameworks/native",
