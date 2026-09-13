@@ -71,6 +71,10 @@ const PATCHES: &[(&str, &str)] = &[
         "android/camera/0002-droidloom-hidl-external-camera-yuv.patch",
     ),
     (
+        "hardware/interfaces",
+        "android/camera/0003-droidloom-hidl-external-service-64.patch",
+    ),
+    (
         "frameworks/native",
         "android/surfaceflinger/0009-droidloom-cpu-placement.patch",
     ),
