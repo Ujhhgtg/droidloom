@@ -380,6 +380,9 @@ fn build(
         podman(&work)
             .args([
                 "build",
+                // Let the build container use the desktop's configured proxy
+                // (127.0.0.1:7890) and normal DNS without rewriting URLs.
+                "--network=host",
                 "--tag",
                 "localhost/droidloom-arch-builder",
                 "--file",
@@ -421,6 +424,7 @@ fn build(
             },
             "--env",
             "CARGO_TARGET_DIR=/build/driver",
+            "--network=host",
         ])
         .arg("--volume")
         .arg(format!("{}:/source:rw", snapshot.display()))
